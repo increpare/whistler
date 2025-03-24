@@ -1,0 +1,12 @@
+#!/bin/bash
+
+./whistler samples/test.wav 0 0 test_0.wav
+./whistler samples/test.wav 0 1 test_1.wav
+./whistler samples/test.wav 0 2 test_2.wav
+./whistler samples/test.wav 0 3 test_3.wav
+./whistler samples/test.wav 0 4 test_4.wav
+./whistler samples/test.wav 0 5 test_5.wav
+./whistler samples/test.wav 0 6 test_6.wav
+./whistler samples/test.wav 0 7 test_7.wav
+./whistler samples/test.wav 0 8 test_8.wav
+./whistler samples/test.wav 0 9 test_9.wav
