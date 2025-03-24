@@ -1,6 +1,6 @@
 # Whistler
 
-Whistler is an audio synthesis and processing toolkit that allows you to transform raw audio into quirky synthesized sounds and to overlay them. It consists of two main components:
+Whistler is an audio synthesis and processing tool (made largely with the help of cursor, so: caveat emptor) that allows you to transform raw audio into quirky synthesized sounds and to overlay them. It consists of two main components:
 
 1. **whistler** - A tool that transforms audio files into synthetic instruments with various effects
 2. **chorus** - A multi-track audio mixer that creates compositions from multiple processed audio files
