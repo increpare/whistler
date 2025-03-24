@@ -4,6 +4,14 @@
 #include <fftw3.h>
 #include <math.h>
 #include <string.h>
+#include <ctype.h>  // For isdigit
+
+// Use the right string comparison function for the platform
+#if defined(_WIN32) || defined(_WIN64)
+    #define STR_COMPARE _stricmp
+#else
+    #define STR_COMPARE strcasecmp
+#endif
 
 // Core settings
 #define MASTER_VOLUME 0.8f
@@ -118,11 +126,21 @@ float noise(void) {
 // Blended waveform for rich pad sound
 float pad_wave(float x, float blend) {
     float sine = sinf(x);
-    float tri = triangle_wave(x);
-    float saw = sawtooth_wave(x);
+    float sine2 = sinf(x * 2.001f) * 0.3f;  // Second partial with slight detuning
+    float sine3 = sinf(x * 0.5f) * 0.4f;    // Sub-oscillator for fullness
+    float tri = triangle_wave(x) * 0.7f;    // Softer triangle component
+    float saw = sawtooth_wave(x) * 0.5f;    // Gentler sawtooth component
     
-    // Blend waveforms together for a rich sound
-    return sine * (1.0f - blend) + (tri * 0.7f + saw * 0.3f) * blend;
+    // Combine sine waves for a complex, rich tone
+    float full_sine = sine + sine2 + sine3;
+    full_sine *= 0.6f;  // Scale to avoid clipping
+    
+    // Create complex waveforms with softer edges
+    float complex_tone = tri + saw;
+    complex_tone *= 0.6f;  // Scale to avoid clipping
+    
+    // Blend sine-heavy tone with complex tone
+    return full_sine * (1.0f - blend) + complex_tone * blend;
 }
 
 // Bell/FM waveform
@@ -343,12 +361,52 @@ void print_usage(const char* program_name) {
     printf("  input_wav_file: Path to the source WAV file\n");
     printf("  semitones: Transposition amount in semitones (positive or negative)\n");
     printf("             Default: 0 (no transposition)\n");
-    printf("  instrument: Instrument type (0-9)\n");
-    printf("             0: Pad     1: Pluck    2: Brass    3: Flute    4: Strings\n");
-    printf("             5: Organ   6: Bell     7: Bass     8: Wurlitzer 9: Acid\n");
+    printf("  instrument: Instrument type (0-9 or name)\n");
+    printf("             0/pad:        Lush Pad\n");
+    printf("             1/pluck:      Plucked String\n");
+    printf("             2/brass:      Brass\n");
+    printf("             3/flute:      Flute\n");
+    printf("             4/strings:    Strings\n");
+    printf("             5/organ:      Organ\n");
+    printf("             6/bell:       Bell\n");
+    printf("             7/bass:       Bass\n");
+    printf("             8/wurlitzer:  Wurlitzer\n");
+    printf("             9/acid:       Acid\n");
     printf("             Default: 0 (Pad)\n");
     printf("  output_file: Path to the output WAV file (optional)\n");
     printf("             Default: <input_basename>_<instrument>_<semitones>.wav\n");
+}
+
+// Create a function to get instrument index by name
+int get_instrument_by_name(const char *name) {
+    const char *names[] = {
+        "pad", "pluck", "brass", "flute", "strings", 
+        "organ", "bell", "bass", "wurlitzer", "acid"
+    };
+    
+    // Also accept full names with case insensitivity
+    const char *full_names[] = {
+        "lush pad", "plucked string", "brass", "flute", "strings", 
+        "organ", "bell", "bass", "wurlitzer", "acid"
+    };
+    
+    for (int i = 0; i < 10; i++) {
+        if (STR_COMPARE(name, names[i]) == 0 || STR_COMPARE(name, full_names[i]) == 0) {
+            return i;
+        }
+    }
+    
+    // Not found - try to convert to a number
+    char *endptr;
+    int idx = (int)strtol(name, &endptr, 10);
+    
+    // If conversion successful and in range, return it
+    if (*name != '\0' && *endptr == '\0' && idx >= 0 && idx <= 9) {
+        return idx;
+    }
+    
+    // Invalid instrument
+    return -1;
 }
 
 int main(int argc, char *argv[]) {
@@ -368,12 +426,23 @@ int main(int argc, char *argv[]) {
     }
     
     if (argc >= 4) {
-        instrument = atoi(argv[3]);
-        // Validate instrument range
-        if (instrument < 0 || instrument > 9) {
-            printf("Error: Instrument must be between 0 and 9\n");
-            print_usage(argv[0]);
-            return 1;
+        // Check if it's a name or number
+        if (isdigit(argv[3][0]) || (argv[3][0] == '-' && isdigit(argv[3][1]))) {
+            instrument = atoi(argv[3]);
+            // Validate instrument range
+            if (instrument < 0 || instrument > 9) {
+                printf("Error: Instrument must be between 0 and 9\n");
+                print_usage(argv[0]);
+                return 1;
+            }
+        } else {
+            // Try to get instrument by name
+            instrument = get_instrument_by_name(argv[3]);
+            if (instrument < 0) {
+                printf("Error: Unknown instrument name: %s\n", argv[3]);
+                print_usage(argv[0]);
+                return 1;
+            }
         }
     }
     
@@ -383,12 +452,17 @@ int main(int argc, char *argv[]) {
     
     // Get the preset for the selected instrument
     const InstrumentPreset* preset = &presets[instrument];
-    
+
     // Calculate frequency multiplier from semitones
     float freq_multiplier = semitones_to_multiplier(transpose_semitones);
     printf("Transposing by %.1f semitones (multiplier: %.3f)\n", transpose_semitones, freq_multiplier);
-    printf("Using instrument: %d\n", instrument);
-    
+
+    // Get instrument name
+    const char *instrument_names[] = {
+        "Lush Pad", "Plucked String", "Brass", "Flute", "Strings", 
+        "Organ", "Bell", "Bass", "Wurlitzer", "Acid"
+    };
+    printf("Using instrument: %d - %s\n", instrument, instrument_names[instrument]);
     
     SF_INFO sfinfo;
     sfinfo.format = 0;
@@ -506,8 +580,16 @@ int main(int argc, char *argv[]) {
             
             // Calculate envelope
             float env_time = (float)current_sample / sfinfo.samplerate;
-            float note_length = (float)sfinfo.frames / sfinfo.samplerate - release_time;
-            float envelope = adsr_envelope(env_time, attack_time, decay_time, sustain_level, release_time, note_length);
+            float note_length = (float)sfinfo.frames / sfinfo.samplerate;
+
+            // Ensure release phase starts at an appropriate time, especially for long release times
+            float release_start = note_length - release_time * 1.5f;
+            if (release_start < attack_time + decay_time) {
+                // If the file is very short, adjust to ensure we still hear something
+                release_start = attack_time + decay_time + 0.1f;
+            }
+
+            float envelope = adsr_envelope(env_time, attack_time, decay_time, sustain_level, release_time, release_start);
             
             // Update chorus LFO
             float chorus_lfo_rate = 2.0f * M_PI * chorus_rate / sfinfo.samplerate;
@@ -623,7 +705,7 @@ int main(int argc, char *argv[]) {
             "organ", "bell", "bass", "wurlitzer", "acid"
         };
         
-        snprintf(output_file, sizeof(output_file), "%s_%s%.1f.wav", 
+        snprintf(output_file, sizeof(output_file), "%s_%s_%.1f.wav", 
                 basename, instrument_names[instrument], transpose_semitones);
         free(input_name);
     }
@@ -656,22 +738,22 @@ const InstrumentPreset presets[] = {
     // INSTR_PAD (0) - Lush pad sound
     {
         .num_oscillators = 4,
-        .detune_amount = 0.08f,
-        .attack_time = 0.3f,
-        .decay_time = 0.2f,
-        .sustain_level = 0.8f,
-        .release_time = 0.5f,
-        .octave_mix = 0.3f,
-        .chorus_rate = 0.2f,
-        .chorus_depth = 0.5f,
-        .chorus_mix = 0.3f,
-        .reverb_mix = 0.4f,
-        .wave_blend = 0.5f,
-        .brightness = 0.7f,
-        .harmonics = 0.4f,
-        .tremolo_rate = 0.0f,
-        .tremolo_depth = 0.0f,
-        .filter_mod = 0.0f
+        .detune_amount = 0.12f,        // Increased detune for wider sound
+        .attack_time = 0.8f,           // Much longer attack for slow fade-in
+        .decay_time = 0.5f,            // Longer decay
+        .sustain_level = 0.7f,         // Slightly lower sustain for warmth
+        .release_time = 1.2f,          // Much longer release for slow fade-out
+        .octave_mix = 0.4f,            // More sub-octave for fullness
+        .chorus_rate = 0.12f,          // Slower chorus for smoother movement
+        .chorus_depth = 0.6f,          // Deeper chorus for more richness
+        .chorus_mix = 0.5f,            // More chorus for fuller sound
+        .reverb_mix = 0.6f,            // More reverb for spaciousness
+        .wave_blend = 0.25f,           // More sine content for roundness
+        .brightness = 0.5f,            // Lower brightness to reduce harshness
+        .harmonics = 0.3f,             // Fewer harmonics for smoothness
+        .tremolo_rate = 0.7f,          // Slow tremolo for gentle undulation
+        .tremolo_depth = 0.08f,        // Subtle tremolo depth
+        .filter_mod = 0.2f             // Gentle filter modulation
     },
     
     // INSTR_PLUCK (1) - Plucked string sound
