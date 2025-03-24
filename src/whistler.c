@@ -357,7 +357,7 @@ void fft(float *buffer, int n, float *frequency, float *amplitude) {
 }
 
 void print_usage(const char* program_name) {
-    printf("Usage: %s <input_wav_file> [semitones] [instrument] [output_file]\n", program_name);
+    printf("Usage: %s <input_wav_file> [semitones] [instrument] [volume] [output_file]\n", program_name);
     printf("  input_wav_file: Path to the source WAV file\n");
     printf("  semitones: Transposition amount in semitones (positive or negative)\n");
     printf("             Default: 0 (no transposition)\n");
@@ -373,6 +373,8 @@ void print_usage(const char* program_name) {
     printf("             8/wurlitzer:  Wurlitzer\n");
     printf("             9/acid:       Acid\n");
     printf("             Default: 0 (Pad)\n");
+    printf("  volume: Output volume multiplier (0.0-10.0) (optional)\n");
+    printf("             Default: 1.0 (original volume)\n");
     printf("  output_file: Path to the output WAV file (optional)\n");
     printf("             Default: <input_basename>_<instrument>_<semitones>.wav\n");
 }
@@ -419,6 +421,7 @@ int main(int argc, char *argv[]) {
     const char *input_file = argv[1];
     float transpose_semitones = 0.0f;
     int instrument = INSTR_PAD;  // Default to pad
+    float volume_multiplier = 1.0f;  // Default volume multiplier
     const char *custom_output_file = NULL;
     
     if (argc >= 3) {
@@ -447,7 +450,15 @@ int main(int argc, char *argv[]) {
     }
     
     if (argc >= 5) {
-        custom_output_file = argv[4];
+        volume_multiplier = atof(argv[4]);
+        // Validate volume range (allow some headroom but prevent extreme values)
+        if (volume_multiplier < 0.0f || volume_multiplier > 10.0f) {
+            printf("Warning: Volume should be between 0.0 and 10.0. Using volume = %.1f\n", volume_multiplier);
+        }
+    }
+    
+    if (argc >= 6) {
+        custom_output_file = argv[5];
     }
     
     // Get the preset for the selected instrument
@@ -681,6 +692,11 @@ int main(int argc, char *argv[]) {
     apply_reverb(buffer, sfinfo.frames, sfinfo.channels);
     g_reverb_mix = orig_reverb_mix;  // Restore the original value
     
+    // After applying reverb and before saving, apply the volume multiplier
+    for (int i = 0; i < items; i++) {
+        buffer[i] *= volume_multiplier;
+    }
+    
     // Save output
     SF_INFO outinfo = sfinfo;
     outinfo.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
@@ -710,7 +726,7 @@ int main(int argc, char *argv[]) {
         free(input_name);
     }
     
-    printf("Writing output to: %s\n", output_file);
+    printf("Writing output to: %s (Volume: %.2f)\n", output_file, volume_multiplier);
     
     SNDFILE *outfile = sf_open(output_file, SFM_WRITE, &outinfo);
     if (!outfile) {
