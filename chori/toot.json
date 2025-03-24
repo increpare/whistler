@@ -1,0 +1,29 @@
+{
+    "song_name": "Toot",
+    "tracks":[
+        {
+            "file": "toot1.wav",
+            "instrument": "pad",
+            "transpose": -12,
+            "volume": 1
+        },
+        {
+            "file": "toot2.wav",
+            "instrument": "strings",
+            "transpose": -24,
+            "volume": 1
+        },
+        {
+            "file": "toot3.wav",
+            "instrument": "wurlitzer",
+            "transpose": -5,
+            "volume": 1
+        },
+        {
+            "file": "toot4.wav",
+            "instrument": "pluck",
+            "transpose": -36,
+            "volume": 1
+        }    
+    ]    
+}

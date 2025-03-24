@@ -1,11 +1,11 @@
 # Build directories
 obj/
 build/
+intermediate/
 
 # Object files
 *.o
 *.obj
-
 # Executables
 whistler
 

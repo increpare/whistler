@@ -1,0 +1,23 @@
+{
+    "song_name": "BeautifulTrio",
+    "tracks":[
+        {
+            "file": "othat.wav",
+            "instrument": "acid",
+            "transpose": 0,
+            "volume": 1
+        },
+        {
+            "file": "test.wav",
+            "instrument": "strings",
+            "transpose": -12,
+            "volume": 1
+        },
+        {
+            "file": "glissandotest.wav",
+            "instrument": "pad",
+            "transpose": -5,
+            "volume": 1
+        }    
+    ]    
+}
