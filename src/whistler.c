@@ -111,7 +111,7 @@ int main(void) {
 
     // Perform FFT on sliding windows
     const int window_size = 1024;
-    const int hop_size = 1024;//128;
+    const int hop_size = 64;//128;
     float *window_buffer = malloc(window_size * sizeof(float));
     
     if (!window_buffer) {
@@ -179,21 +179,31 @@ int main(void) {
         int end_frame = (w == num_windows - 1) ? sfinfo.frames : (w + 1) * hop_size;
         int segment_length = end_frame - start_frame;
         
+        // Get frequencies for interpolation
+        float current_frequency = freq_data[w].frequency;
+        float next_frequency = (w < num_windows - 1) ? freq_data[w + 1].frequency : current_frequency;
+        
         // Generate sine wave for this segment
         for (int i = 0; i < segment_length; i++) {
             int frame_idx = start_frame + i;
-            float current_phase = phase + 2.0f * M_PI * freq_data[w].frequency * i / sfinfo.samplerate;
+            
+            // Interpolate between current and next frequency
+            float progress = (float)i / (float)segment_length;
+            float interpolated_frequency = current_frequency * (1.0f - progress) + next_frequency * progress;
+            
+            // Calculate phase increment for this sample
+            float phase_increment = 2.0f * M_PI * interpolated_frequency / sfinfo.samplerate;
+            phase += phase_increment;
+            
+            // Keep phase between 0 and 2π
+            while (phase >= 2.0f * M_PI) {
+                phase -= 2.0f * M_PI;
+            }
             
             // Apply to all channels
             for (int ch = 0; ch < sfinfo.channels; ch++) {
-                buffer[frame_idx * sfinfo.channels + ch] = freq_data[w].amplitude * triangle_wave(current_phase) * MASTER_VOLUME;
+                buffer[frame_idx * sfinfo.channels + ch] = freq_data[w].amplitude * triangle_wave(phase) * MASTER_VOLUME;
             }
-        }
-        
-        // Update phase for the next segment to ensure continuity
-        phase += 2.0f * M_PI * freq_data[w].frequency * segment_length / sfinfo.samplerate;
-        while (phase >= 2.0f * M_PI) {
-            phase -= 2.0f * M_PI;
         }
     }
     
