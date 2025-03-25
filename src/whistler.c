@@ -1,10 +1,103 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <sndfile.h>
-#include <fftw3.h>
 #include <math.h>
 #include <string.h>
 #include <ctype.h>  // For isdigit
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+// Simplified versions of required functions for WebAssembly
+#else
+#include <sndfile.h>
+#include <fftw3.h>
+#endif
+
+// Virtual file IO for WebAssembly
+#ifdef __EMSCRIPTEN__
+// Simplified versions of structures and functions needed for web
+typedef struct {
+    float* data;
+    int length;
+    int channels;
+    int samplerate;
+} AudioBuffer;
+
+// Minimal implementation of audio processing for WebAssembly
+// These functions will replace the full functionality when compiling for web
+float* process_audio_emscripten(float* input_data, int input_length, int instrument_type,
+                              int semitones, float volume, int* output_length);
+
+#else
+// Full implementation for native builds
+typedef struct {
+    sf_count_t offset;
+    sf_count_t length;
+    float* data;
+} VirtualFile;
+
+static sf_count_t vio_get_filelen(void* user_data) {
+    VirtualFile* vf = (VirtualFile*)user_data;
+    return vf->length;
+}
+
+static sf_count_t vio_seek(sf_count_t offset, int whence, void* user_data) {
+    VirtualFile* vf = (VirtualFile*)user_data;
+    
+    switch (whence) {
+        case SEEK_SET:
+            vf->offset = offset;
+            break;
+        case SEEK_CUR:
+            vf->offset += offset;
+            break;
+        case SEEK_END:
+            vf->offset = vf->length + offset;
+            break;
+        default:
+            return -1;
+    }
+    
+    if (vf->offset < 0) vf->offset = 0;
+    if (vf->offset > vf->length) vf->offset = vf->length;
+    
+    return vf->offset;
+}
+
+static sf_count_t vio_read(void* ptr, sf_count_t count, void* user_data) {
+    VirtualFile* vf = (VirtualFile*)user_data;
+    sf_count_t remaining = vf->length - vf->offset;
+    sf_count_t to_read = (remaining < count) ? remaining : count;
+    
+    memcpy(ptr, &vf->data[vf->offset], to_read * sizeof(float));
+    vf->offset += to_read;
+    
+    return to_read;
+}
+
+static sf_count_t vio_write(const void* ptr, sf_count_t count, void* user_data) {
+    VirtualFile* vf = (VirtualFile*)user_data;
+    sf_count_t available = vf->length - vf->offset;
+    sf_count_t to_write = (available < count) ? available : count;
+    
+    memcpy(&vf->data[vf->offset], ptr, to_write * sizeof(float));
+    vf->offset += to_write;
+    
+    return to_write;
+}
+
+static sf_count_t vio_tell(void* user_data) {
+    VirtualFile* vf = (VirtualFile*)user_data;
+    return vf->offset;
+}
+
+SF_VIRTUAL_IO sf_virtual_io = {
+    vio_get_filelen,
+    vio_seek,
+    vio_read,
+    vio_write,
+    vio_tell
+};
+#endif
 
 // Use the right string comparison function for the platform
 #if defined(_WIN32) || defined(_WIN64)
@@ -51,8 +144,8 @@ float g_reverb_decay = 0.8f;     // Decay factor (0.0 to 1.0)
 #define RELEASE_TIME 0.5f      // Release time in seconds
 #define OCTAVE_MIX 0.3f        // Amount of lower octave to mix in (0.0 - 1.0)
 #define CHORUS_RATE 0.2f       // Chorus LFO rate in Hz
-#define CHORUS_DEPTH 0.5f      // Chorus depth (0.0 - 1.0)
-#define CHORUS_MIX 0.3f        // Chorus mix (0.0 - 1.0)
+#define CHORUS_DEPTH 0.5f      // Chorus depth (0.0-1.0)
+#define CHORUS_MIX 0.3f        // Chorus mix (0.0-1.0)
 
 // Instrument presets - these will be selected based on instrument type
 typedef struct {
@@ -410,6 +503,198 @@ int get_instrument_by_name(const char *name) {
     // Invalid instrument
     return -1;
 }
+
+// Function to be exported to WebAssembly for processing audio from JavaScript
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+float* process_audio(float* input_buffer, int input_length, int instrument_type, 
+                    int semitones, float volume, int* output_length) {
+    
+    // Create a new buffer for output (with extra space for potential effects)
+    int max_output_len = input_length * 2;
+    float* output_buffer = malloc(max_output_len * sizeof(float));
+    if (!output_buffer) {
+        printf("Failed to allocate memory for output buffer\n");
+        *output_length = 0;
+        return NULL;
+    }
+    
+    // Calculate pitch shift ratio
+    float pitch_ratio = powf(2.0f, semitones / 12.0f);
+    
+    // Apply simple instrument model and pitch shifting
+    int output_pos = 0;
+    for (int i = 0; i < input_length; i++) {
+        // Simple time-domain pitch shifting (real implementation would use FFT)
+        int source_pos = (int)(i / pitch_ratio);
+        
+        if (source_pos < input_length) {
+            float sample = input_buffer[source_pos];
+            
+            // Apply volume
+            sample *= volume;
+            
+            // Apply simple instrument effects based on instrument_type
+            switch (instrument_type) {
+                case 0: // Pad
+                    // Add a slight chorus effect
+                    if (i > 0) {
+                        sample = 0.7f * sample + 0.3f * input_buffer[source_pos > 0 ? source_pos - 1 : 0];
+                    }
+                    break;
+                case 1: // Pluck
+                    // Add a slight decay
+                    sample *= 1.0f - 0.2f * ((float)i / input_length);
+                    break;
+                case 2: // Brass
+                    // Add a slight brightness
+                    if (i > 0 && source_pos > 0) {
+                        sample = 0.8f * sample + 0.2f * (sample - input_buffer[source_pos - 1]);
+                    }
+                    break;
+                case 3: // Flute
+                    // Add a slight smoothing
+                    if (i > 0 && source_pos > 0) {
+                        sample = 0.7f * sample + 0.3f * input_buffer[source_pos - 1];
+                    }
+                    break;
+                case 4: // Strings
+                    // Add a slight vibrato
+                    {
+                        float vibrato = 0.02f * sinf(i * 0.01f);
+                        int mod_pos = source_pos + (int)(vibrato * input_length);
+                        if (mod_pos >= 0 && mod_pos < input_length) {
+                            sample = 0.8f * sample + 0.2f * input_buffer[mod_pos];
+                        }
+                    }
+                    break;
+                case 5: // Organ
+                    // Add harmonics
+                    sample = 0.7f * sample + 0.3f * sinf(i * 0.02f);
+                    break;
+                case 6: // Bell
+                    // Add ring modulation for bell-like sound
+                    sample *= (0.5f + 0.5f * sinf(i * 0.1f));
+                    break;
+                case 7: // Bass
+                    // Enhance low end
+                    sample = 1.2f * sample;
+                    if (sample > 1.0f) sample = 1.0f;
+                    if (sample < -1.0f) sample = -1.0f;
+                    break;
+                case 8: // Wurlitzer
+                    // Add slight distortion
+                    sample = tanhf(sample * 1.5f) * 0.8f;
+                    break;
+                case 9: // Acid
+                    // Add filter sweep
+                    {
+                        float sweep = 0.5f + 0.5f * sinf(i * 0.001f);
+                        sample = sample * sweep + 0.1f * sinf(i * 0.05f) * (1.0f - sweep);
+                    }
+                    break;
+                default:
+                    // No effect for unknown instrument types
+                    break;
+            }
+            
+            // Store in output buffer
+            output_buffer[output_pos++] = sample;
+        }
+    }
+    
+    // Set the actual output length
+    *output_length = output_pos;
+    
+    return output_buffer;
+}
+#else
+
+EMSCRIPTEN_KEEPALIVE
+float* process_audio(float* input_buffer, int input_length, int instrument_type, 
+                    int semitones, float volume, int* output_length) {
+    
+    // Create a virtual file for the input
+    VirtualFile vf;
+    vf.data = input_buffer;
+    vf.length = input_length;
+    vf.offset = 0;
+    
+    // Create a temporary file for the input
+    SF_INFO sfinfo;
+    memset(&sfinfo, 0, sizeof(sfinfo));
+    sfinfo.channels = 1;
+    sfinfo.samplerate = 44100;
+    sfinfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+    
+    SNDFILE* input_file = sf_open_virtual(&sf_virtual_io, SFM_READ, &sfinfo, &vf);
+    if (!input_file) {
+        printf("Failed to create virtual input file\n");
+        return NULL;
+    }
+    
+    // Allocate output buffer
+    int max_output_len = input_length * 2; // Allow extra space for effects
+    float* output_buffer = malloc(max_output_len * sizeof(float));
+    
+    // Set up FFT for pitch detection
+    fftwf_complex *fft_in, *fft_out;
+    fftwf_plan fft_forward;
+    
+    fft_in = (fftwf_complex*) fftwf_malloc(sizeof(fftwf_complex) * WINDOW_SIZE);
+    fft_out = (fftwf_complex*) fftwf_malloc(sizeof(fftwf_complex) * WINDOW_SIZE);
+    fft_forward = fftwf_plan_dft_1d(WINDOW_SIZE, fft_in, fft_out, FFTW_FORWARD, FFTW_ESTIMATE);
+    
+    // Process the audio based on the instrument type
+    // This is a simplified version of the main processing loop
+    float current_freq = 440.0f; // Default frequency
+    float current_amp = 0.0f;
+    
+    // Create intermediate buffer for reading audio frames
+    float buffer[WINDOW_SIZE];
+    int frames_read = 0;
+    int output_index = 0;
+    
+    // Read and process frames
+    while ((frames_read = sf_read_float(input_file, buffer, WINDOW_SIZE)) > 0) {
+        // Apply volume
+        for (int i = 0; i < frames_read; i++) {
+            buffer[i] *= volume;
+        }
+        
+        // Transpose if needed (simplified)
+        if (semitones != 0) {
+            float pitch_ratio = powf(2.0f, semitones / 12.0f);
+            // Simple time-stretching for demonstration
+            // A real implementation would use a proper time-stretching algorithm
+            for (int i = 0; i < frames_read; i++) {
+                int src_idx = (int)(i / pitch_ratio);
+                if (src_idx < frames_read) {
+                    output_buffer[output_index++] = buffer[src_idx];
+                }
+            }
+        } else {
+            // No transposition, just copy
+            for (int i = 0; i < frames_read; i++) {
+                output_buffer[output_index++] = buffer[i];
+            }
+        }
+    }
+    
+    // Clean up FFT resources
+    fftwf_destroy_plan(fft_forward);
+    fftwf_free(fft_in);
+    fftwf_free(fft_out);
+    
+    // Close the input file
+    sf_close(input_file);
+    
+    // Set the actual output length
+    *output_length = output_index;
+    
+    return output_buffer;
+}
+#endif
 
 int main(int argc, char *argv[]) {
     // Parse command line arguments
